@@ -427,13 +427,13 @@ export class OkxAdapter implements SourceAdapter {
         if (!settled) {
           settled = true;
           resolve();
-        } else {
-          this.handlers.onStatus({
-            status: "live",
-            source: "okx",
-            note: "OKX 무기한 선물 실시간 (바이낸스 대체 피드)",
-          });
         }
+        // 첫 연결이든 재연결이든, 열리면 바로 '실시간' 상태로 알린다.
+        this.handlers.onStatus({
+          status: "live",
+          source: "okx",
+          note: "OKX 무기한 선물 실시간 (바이낸스 대체 피드)",
+        });
       };
 
       socket.onmessage = (event) => {
