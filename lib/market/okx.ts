@@ -1,7 +1,8 @@
 import { SYMBOLS, type Interval, type Symbol } from "@/lib/constants";
 import type { AdapterHandlers, AdapterOptions, PricePatch, SourceAdapter } from "./adapter";
 import { fetchJson } from "./adapter";
-import type { Candle, OrderBookLevel, OrderBookSnapshot } from "./types";
+import { LiveCandleBuilder, firstNum, toNum } from "./liveCandle";
+import type { Candle, OrderBookLevel, OrderBookSnapshot, Ticker } from "./types";
 
 const REST = "https://www.okx.com";
 const WS = "wss://ws.okx.com:8443/ws/v5/public";
@@ -75,14 +76,17 @@ export class OkxAdapter implements SourceAdapter {
   private restAsks: OrderBookLevel[] = [];
   private wsBids: OrderBookLevel[] = [];
   private wsAsks: OrderBookLevel[] = [];
+  private lastTickAt = 0;
   private readonly handlers: AdapterHandlers;
   private readonly symbol: Symbol;
   private readonly interval: Interval;
+  private readonly candles: LiveCandleBuilder;
 
   constructor({ symbol, interval, handlers }: AdapterOptions) {
     this.symbol = symbol;
     this.interval = interval;
     this.handlers = handlers;
+    this.candles = new LiveCandleBuilder(interval);
   }
 
   async start(): Promise<void> {
@@ -99,20 +103,33 @@ export class OkxAdapter implements SourceAdapter {
       this.request<{ markPx: string }[]>(`/api/v5/public/mark-price?instId=${activeInst}`),
     ]);
 
-    this.handlers.onCandles(
-      candles
-        .map((row) => ({
-          time: Math.floor(Number(row[0]) / 1000),
-          open: Number(row[1]),
-          high: Number(row[2]),
-          low: Number(row[3]),
-          close: Number(row[4]),
-          volume: Number(row[6]),
-        }))
-        .sort((a, b) => a.time - b.time),
-    );
+    const parsedCandles = candles
+      .map((row) => ({
+        time: Math.floor(Number(row[0]) / 1000),
+        open: toNum(row[1]),
+        high: toNum(row[2]),
+        low: toNum(row[3]),
+        close: toNum(row[4]),
+        volume: toNum(row[6]),
+      }))
+      .filter((row) => Number.isFinite(row.close))
+      .sort((a, b) => a.time - b.time);
+    if (parsedCandles.length > 0) {
+      this.candles.seed(parsedCandles);
+      this.handlers.onCandles(parsedCandles);
+      this.handlers.onPrices({
+        [this.symbol]: {
+          last: parsedCandles[parsedCandles.length - 1].close,
+          updatedAt: Date.now(),
+        },
+      } as PricePatch);
+    }
 
-    if (ticker[0]) this.handlers.onPrices(this.tickerPatch(this.symbol, ticker[0]));
+    if (ticker[0]) {
+      this.handlers.onPrices(this.tickerPatch(this.symbol, ticker[0]));
+      const last = firstNum(ticker[0].last);
+      if (Number.isFinite(last)) this.emitTick(last, Date.now(), 0, false);
+    }
     if (mark[0]) {
       this.handlers.onPrices({
         [this.symbol]: { mark: Number(mark[0].markPx), updatedAt: Date.now() },
@@ -125,9 +142,11 @@ export class OkxAdapter implements SourceAdapter {
     }
     await this.refreshFunding();
 
-    // 호가·펀딩은 웹소켓과 무관하게 REST로도 계속 갱신한다.
+    // 호가·펀딩·캔들은 웹소켓과 무관하게 REST로도 계속 갱신한다.
+    // (candle/trades 스트림이 조용한 환경에서도 차트가 멈추지 않게 하는 안전망)
     this.bookPoll = setInterval(() => void this.pollBooks(), 900);
     this.fundingPoll = setInterval(() => void this.refreshFunding(), 60000);
+    this.startRestPolling(false);
 
     this.handlers.onStatus({
       status: "connecting",
@@ -156,7 +175,7 @@ export class OkxAdapter implements SourceAdapter {
           /* noop */
         }
         this.ws = null;
-        this.startRestPolling();
+        this.startRestPolling(true);
         this.handlers.onStatus({
           status: "live",
           source: "okx",
@@ -181,9 +200,11 @@ export class OkxAdapter implements SourceAdapter {
     }, 20000);
   }
 
-  private startRestPolling(): void {
-    this.tickerPoll = setInterval(() => void this.refreshTickers(), 2000);
-    this.candlePoll = setInterval(() => void this.refreshLastCandle(), 3000);
+  private startRestPolling(fast: boolean): void {
+    if (this.tickerPoll) clearInterval(this.tickerPoll);
+    if (this.candlePoll) clearInterval(this.candlePoll);
+    this.tickerPoll = setInterval(() => void this.refreshTickers(), fast ? 2000 : 8000);
+    this.candlePoll = setInterval(() => void this.refreshLastCandle(), fast ? 2000 : 4000);
   }
 
   private async refreshTickers(): Promise<void> {
@@ -221,14 +242,17 @@ export class OkxAdapter implements SourceAdapter {
         `/api/v5/market/candles?instId=${instId(this.symbol)}&bar=${BAR_MAP[this.interval]}&limit=2`,
       );
       if (rows[0]) {
-        this.handlers.onCandle({
+        const candle: Candle = {
           time: Math.floor(Number(rows[0][0]) / 1000),
-          open: Number(rows[0][1]),
-          high: Number(rows[0][2]),
-          low: Number(rows[0][3]),
-          close: Number(rows[0][4]),
-          volume: Number(rows[0][6]),
-        });
+          open: toNum(rows[0][1]),
+          high: toNum(rows[0][2]),
+          low: toNum(rows[0][3]),
+          close: toNum(rows[0][4]),
+          volume: toNum(rows[0][6]),
+        };
+        const merged = this.candles.merge(candle);
+        if (merged) this.handlers.onCandle(merged);
+        this.emitTick(candle.close, Date.now(), 0, false);
       }
     } catch {
       /* noop */
@@ -264,19 +288,45 @@ export class OkxAdapter implements SourceAdapter {
   }
 
   private tickerPatch(symbol: Symbol, t: OkxTicker): PricePatch {
-    const last = Number(t.last);
-    const open = Number(t.open24h);
-    const change = open > 0 ? ((last - open) / open) * 100 : 0;
-    return {
-      [symbol]: {
-        last,
-        changePct24h: change,
-        high24h: Number(t.high24h),
-        low24h: Number(t.low24h),
-        volume24h: Number(t.volCcy24h) * last,
-        updatedAt: Date.now(),
-      },
-    } as PricePatch;
+    const patch: Partial<Ticker> = { updatedAt: Date.now() };
+    const last = firstNum(t.last);
+    const open = firstNum(t.open24h);
+    const high = firstNum(t.high24h);
+    const low = firstNum(t.low24h);
+    const volCcy = firstNum(t.volCcy24h);
+    const vol = firstNum(t.vol24h);
+    if (Number.isFinite(last)) patch.last = last;
+    if (Number.isFinite(high)) patch.high24h = high;
+    if (Number.isFinite(low)) patch.low24h = low;
+    if (Number.isFinite(open) && Number.isFinite(last) && open > 0) {
+      patch.changePct24h = ((last - open) / open) * 100;
+    }
+    if (Number.isFinite(volCcy) && Number.isFinite(last)) {
+      patch.volume24h = volCcy * last;
+    } else if (Number.isFinite(vol) && Number.isFinite(last)) {
+      patch.volume24h = vol * last;
+    }
+    return { [symbol]: patch } as PricePatch;
+  }
+
+  /**
+   * 체결/호가 틱을 가격(last)과 진행 중인 캔들에 반영한다.
+   * 200ms 스로틀을 두어 REST 호가 폴링(900ms)과 체결 스트림이
+   * 화면을 과도하게 다시 그리지 않도록 한다.
+   */
+  private emitTick(price: number, timeMs: number, qty: number, throttled = true): void {
+    if (!Number.isFinite(price) || price <= 0) return;
+    const now = Date.now();
+    if (throttled && now - this.lastTickAt < 200) return;
+    this.lastTickAt = now;
+
+    this.handlers.onPrices({
+      [this.symbol]: { last: price, updatedAt: now },
+    } as PricePatch);
+
+    for (const candle of this.candles.push(price, timeMs, qty)) {
+      this.handlers.onCandle(candle);
+    }
   }
 
   private async refreshFunding(): Promise<void> {
@@ -311,6 +361,9 @@ export class OkxAdapter implements SourceAdapter {
         this.restBids = parseLevels(books[0].bids);
         this.restAsks = parseLevels(books[0].asks);
         this.emitBook();
+        const bestBid = this.restBids[0]?.price;
+        const bestAsk = this.restAsks[0]?.price;
+        if (bestBid > 0 && bestAsk > 0) this.emitTick((bestBid + bestAsk) / 2, Date.now(), 0);
       }
     } catch {
       /* 폴링 실패는 무시하고 다음 주기 */
@@ -451,7 +504,10 @@ export class OkxAdapter implements SourceAdapter {
     const channel = msg.arg.channel;
 
     if (channel === "tickers" && msg.data[0]) {
-      this.handlers.onPrices(this.tickerPatch(symbol, msg.data[0] as OkxTicker));
+      const row = msg.data[0] as OkxTicker;
+      this.handlers.onPrices(this.tickerPatch(symbol, row));
+      const last = firstNum(row.last);
+      if (symbol === this.symbol && Number.isFinite(last)) this.emitTick(last, Date.now(), 0);
       return;
     }
 
@@ -468,33 +524,47 @@ export class OkxAdapter implements SourceAdapter {
       this.wsBids = parseLevels(row.bids);
       this.wsAsks = parseLevels(row.asks);
       this.emitBook();
+      const bestBid = this.wsBids[0]?.price;
+      const bestAsk = this.wsAsks[0]?.price;
+      if (symbol === this.symbol && bestBid > 0 && bestAsk > 0) {
+        this.emitTick((bestBid + bestAsk) / 2, Date.now(), 0);
+      }
       return;
     }
 
     if (channel === "trades" && msg.data[0]) {
       const row = msg.data[0] as { px: string; sz: string; side: string; ts: string; tradeId: string };
       const price = Number(row.px);
+      const qty = Number(row.sz);
+      const time = Number(row.ts);
       this.handlers.onPrices({ [symbol]: { last: price, updatedAt: Date.now() } } as PricePatch);
       this.handlers.onTrade({
         id: `o_${row.tradeId}`,
         price,
-        qty: Number(row.sz),
+        qty,
         side: row.side === "sell" ? "SELL" : "BUY",
-        time: Number(row.ts),
+        time,
       });
+      if (symbol === this.symbol) this.emitTick(price, time, qty, false);
       return;
     }
 
     if (channel.startsWith("candle") && msg.data[0]) {
+      if (symbol !== this.symbol) return;
       const row = msg.data[0] as OkxCandleRow;
-      this.handlers.onCandle({
+      const candle: Candle = {
         time: Math.floor(Number(row[0]) / 1000),
-        open: Number(row[1]),
-        high: Number(row[2]),
-        low: Number(row[3]),
-        close: Number(row[4]),
-        volume: Number(row[6]),
-      });
+        open: toNum(row[1]),
+        high: toNum(row[2]),
+        low: toNum(row[3]),
+        close: toNum(row[4]),
+        volume: toNum(row[6]),
+      };
+      const merged = this.candles.merge(candle);
+      if (merged) this.handlers.onCandle(merged);
+      this.handlers.onPrices({
+        [this.symbol]: { last: candle.close, updatedAt: Date.now() },
+      } as PricePatch);
     }
   }
 }

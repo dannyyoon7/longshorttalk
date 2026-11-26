@@ -29,6 +29,7 @@ export default function TradingChart({ symbol, candles, lastCandle, positions }:
   const volumeSeriesRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
   const lastTimeRef = useRef<number>(0);
+  const dataKeyRef = useRef<string>("");
   const meta = SYMBOL_META[symbol];
 
   useEffect(() => {
@@ -112,10 +113,11 @@ export default function TradingChart({ symbol, candles, lastCandle, positions }:
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry) return;
-      chart.applyOptions({
-        width: Math.floor(entry.contentRect.width),
-        height: Math.floor(entry.contentRect.height),
-      });
+      const width = Math.floor(entry.contentRect.width);
+      const height = Math.floor(entry.contentRect.height);
+      // 탭 전환 등으로 숨겨진 상태(0 크기)에서는 건너뛰고, 다시 보일 때 재조정한다.
+      if (width <= 0 || height <= 0) return;
+      chart.applyOptions({ width, height });
     });
     observer.observe(container);
 
@@ -160,27 +162,40 @@ export default function TradingChart({ symbol, candles, lastCandle, positions }:
       })),
     );
     lastTimeRef.current = candles.length ? candles[candles.length - 1].time : 0;
-    if (candles.length) chartRef.current?.timeScale().scrollToRealTime();
-  }, [candles]);
+    // 통화쌍·타임프레임이 바뀌어 새로 그린 경우에만 우측(현재)으로 이동한다.
+    // (새 봉이 추가될 때마다 사용자가 보던 위치를 빼앗지 않도록)
+    const key = `${symbol}:${candles[0]?.time ?? 0}`;
+    if (candles.length && dataKeyRef.current !== key) {
+      dataKeyRef.current = key;
+      chartRef.current?.timeScale().scrollToRealTime();
+    }
+  }, [candles, symbol]);
 
-  // 실시간 마지막 캔들
+  // 실시간 마지막 캔들 (kline/체결가/호가 틱으로 계속 갱신)
   useEffect(() => {
-    if (!lastCandle || !candleSeriesRef.current) return;
+    const candleSeries = candleSeriesRef.current;
+    if (!lastCandle || !candleSeries || !Number.isFinite(lastCandle.close)) return;
     if (lastCandle.time < lastTimeRef.current) return;
     lastTimeRef.current = lastCandle.time;
-    candleSeriesRef.current.update({
-      time: lastCandle.time as UTCTimestamp,
-      open: lastCandle.open,
-      high: lastCandle.high,
-      low: lastCandle.low,
-      close: lastCandle.close,
-    });
-    volumeSeriesRef.current?.update({
-      time: lastCandle.time as UTCTimestamp,
-      value: lastCandle.volume,
-      color:
-        lastCandle.close >= lastCandle.open ? "rgba(14,203,129,0.35)" : "rgba(246,70,93,0.35)",
-    });
+    try {
+      candleSeries.update({
+        time: lastCandle.time as UTCTimestamp,
+        open: lastCandle.open,
+        high: lastCandle.high,
+        low: lastCandle.low,
+        close: lastCandle.close,
+      });
+      volumeSeriesRef.current?.update({
+        time: lastCandle.time as UTCTimestamp,
+        value: lastCandle.volume,
+        color:
+          lastCandle.close >= lastCandle.open
+            ? "rgba(14,203,129,0.35)"
+            : "rgba(246,70,93,0.35)",
+      });
+    } catch {
+      /* 같은 시각 역방향 갱신 등 일시적 오류는 다음 틱에서 회복된다 */
+    }
   }, [lastCandle]);
 
   // 포지션 가격선

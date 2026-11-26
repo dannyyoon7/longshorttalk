@@ -63,7 +63,7 @@ export default function HomePage() {
           <h1 className="mt-1.5 text-[15px] font-bold tracking-tight text-txt sm:text-[17px]">
             비트코인·이더리움 선물 모의투자 터미널
           </h1>
-          <p className="mt-0.5 text-[11px] text-muted">
+          <p className="mt-0.5 hidden text-[11px] text-muted sm:block">
             실시간 시세 · 레버리지 · 청산가 · 포지션 채팅까지, 실제 거래소처럼 연습하세요.
           </p>
         </div>

@@ -70,6 +70,9 @@ export function MarketProvider({ children }: { children: ReactNode }) {
   const priceBuffer = useRef<PricePatch[]>([]);
   const tradeBuffer = useRef<RecentTrade[]>([]);
   const bookRef = useRef<OrderBookSnapshot>(EMPTY_BOOK);
+  const pendingCandle = useRef<Candle | null>(null);
+  const lastCandleRef = useRef<Candle | null>(null);
+  const candlesRef = useRef<Candle[]>([]);
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const feedRef = useRef<MarketFeed | null>(null);
 
@@ -93,6 +96,21 @@ export function MarketProvider({ children }: { children: ReactNode }) {
       const incoming = tradeBuffer.current;
       tradeBuffer.current = [];
       setTrades((prev) => [...incoming.slice().reverse(), ...prev].slice(0, 40));
+    }
+    // 실시간 캔들: 초당 여러 번 들어오는 틱을 한 번에 반영한다.
+    const candle = pendingCandle.current;
+    if (candle) {
+      pendingCandle.current = null;
+      const prev = lastCandleRef.current;
+      if (!prev || candle.time >= prev.time) {
+        lastCandleRef.current = candle;
+        setLastCandle(candle);
+        const tail = candlesRef.current[candlesRef.current.length - 1];
+        if (!tail || candle.time > tail.time) {
+          candlesRef.current = [...candlesRef.current, candle];
+          setCandles(candlesRef.current);
+        }
+      }
     }
     setBook(bookRef.current);
   }, []);
@@ -125,11 +143,16 @@ export function MarketProvider({ children }: { children: ReactNode }) {
           scheduleFlush();
         },
         onCandles: (next) => {
+          candlesRef.current = next;
+          const last = next.length ? next[next.length - 1] : null;
+          lastCandleRef.current = last;
+          pendingCandle.current = null;
           setCandles(next);
-          setLastCandle(next.length ? next[next.length - 1] : null);
+          setLastCandle(last);
         },
         onCandle: (candle) => {
-          setLastCandle(candle);
+          pendingCandle.current = candle;
+          scheduleFlush();
         },
         onTrade: (trade) => {
           tradeBuffer.current.push(trade);
@@ -158,6 +181,10 @@ export function MarketProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     feedRef.current?.setMarket(symbol, interval);
+    candlesRef.current = [];
+    lastCandleRef.current = null;
+    pendingCandle.current = null;
+    priceBuffer.current = [];
     setCandles([]);
     setLastCandle(null);
     setBook(EMPTY_BOOK);
@@ -187,7 +214,7 @@ export function MarketProvider({ children }: { children: ReactNode }) {
       interval,
       candles,
       lastCandle,
-      ready: candles.length > 0,
+      ready: candles.length > 0 || lastCandle !== null,
     }),
     [symbol, interval, candles, lastCandle],
   );

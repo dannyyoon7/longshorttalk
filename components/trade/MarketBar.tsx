@@ -100,7 +100,7 @@ export function MarketBar() {
           <div className="px-3 py-2.5">
             <p className="text-[10px] text-muted">24시간 변동</p>
             <p className={cn("tnum mt-1 text-[15px] font-semibold leading-none", up ? "text-up" : "text-down")}>
-              {ticker.mark ? fmtPct(ticker.changePct24h) : "—"}
+              {ticker.last ? fmtPct(ticker.changePct24h) : "—"}
             </p>
             <p className="tnum mt-1 truncate text-[10px] text-muted">
               고 {ticker.high24h ? fmtPrice(symbol, ticker.high24h) : "—"} · 저{" "}
@@ -117,7 +117,7 @@ export function MarketBar() {
             <p className="mt-1 flex items-center gap-1 text-[10px] text-muted">
               <Clock3 className="h-3 w-3" /> 펀딩{" "}
               <span className={cn("tnum", ticker.fundingRate >= 0 ? "text-up" : "text-down")}>
-                {ticker.fundingRate ? `${(ticker.fundingRate * 100).toFixed(4)}%` : "—"}
+                {ticker.updatedAt ? `${(ticker.fundingRate * 100).toFixed(4)}%` : "—"}
               </span>
             </p>
           </div>
@@ -146,7 +146,7 @@ export function MarketBar() {
             <p className="text-[10px] text-muted">
               펀딩 <FundingCountdown target={ticker.nextFundingTime} /> ·{" "}
               <span className={cn(ticker.fundingRate >= 0 ? "text-up" : "text-down")}>
-                {ticker.fundingRate ? `${(ticker.fundingRate * 100).toFixed(4)}%` : "—"}
+                {ticker.updatedAt ? `${(ticker.fundingRate * 100).toFixed(4)}%` : "—"}
               </span>
             </p>
           </div>

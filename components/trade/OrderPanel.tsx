@@ -24,11 +24,13 @@ import { cn, fmtPct, fmtPrice, fmtQty, fmtUsdt } from "@/lib/utils";
 
 type Props = {
   preset: { price: number; ts: number } | null;
+  /** 모바일용 컴팩트 렌더 (여백·안내문 축약) */
+  compact?: boolean;
 };
 
 const PERCENTS = [25, 50, 75, 100];
 
-export function OrderPanel({ preset }: Props) {
+export function OrderPanel({ preset, compact = false }: Props) {
   const { symbol, prices } = useMarketPrices();
   const account = useAccount();
   const { push } = useToast();
@@ -167,7 +169,7 @@ export function OrderPanel({ preset }: Props) {
         </span>
       </div>
 
-      <div className="space-y-3 px-3 py-3">
+      <div className={cn("space-y-3 px-3 py-3", compact && "space-y-2.5 px-2.5 py-2.5")}>
         <div className="flex rounded-md border border-line bg-panel2 p-0.5">
           {(["CROSS", "ISOLATED"] as MarginMode[]).map((mode) => (
             <button
@@ -343,7 +345,7 @@ export function OrderPanel({ preset }: Props) {
               <span className="text-down">{liqShort ? fmtPrice(symbol, liqShort) : "없음"}</span>
             </span>
           </div>
-          <p className="mt-1 text-[9px] text-muted/70">
+          <p className={cn("mt-1 text-[9px] text-muted/70", compact && "hidden sm:block")}>
             청산가는 유지증거금률 {(MAINTENANCE_MARGIN_RATE * 100).toFixed(1)}% 기준 추정치입니다.
             교차 모드에서 지갑 잔고가 충분하면 청산가가 형성되지 않아 &lsquo;없음&rsquo;으로 표시됩니다.
           </p>
@@ -461,7 +463,7 @@ export function OrderPanel({ preset }: Props) {
           </button>
         )}
 
-        <p className="text-center text-[9px] text-muted/60">
+        <p className={cn("text-center text-[9px] text-muted/60", compact && "hidden sm:block")}>
           모의투자입니다. 실제 주문·입출금은 발생하지 않습니다.
         </p>
       </div>
