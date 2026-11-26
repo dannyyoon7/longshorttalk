@@ -51,8 +51,11 @@ type BinancePremium = {
 };
 
 type BinanceDepth = {
-  b: [string, string][];
-  a: [string, string][];
+  /** 웹소켓은 b/a, REST(/fapi/v1/depth)는 bids/asks 로 내려올 수 있어 둘 다 받는다 */
+  b?: [string, string][];
+  a?: [string, string][];
+  bids?: [string, string][];
+  asks?: [string, string][];
   /** 거래소 이벤트/거래 시각 (ms) — 로컬 시계 오차와 무관하게 봉 시각을 맞춘다 */
   T?: number;
   E?: number;
@@ -463,16 +466,19 @@ export class BinanceAdapter implements SourceAdapter {
   }
 
   private emitDepth(d: BinanceDepth): void {
-    const bids = (d.b ?? [])
+    const rawBids = d.b ?? d.bids ?? [];
+    const rawAsks = d.a ?? d.asks ?? [];
+    const bids = rawBids
       .map(([p, q]) => ({ price: toNum(p), qty: toNum(q) }))
       .filter((l) => l.qty > 0 && Number.isFinite(l.price))
       .sort((a, b) => b.price - a.price)
       .slice(0, 10);
-    const asks = (d.a ?? [])
+    const asks = rawAsks
       .map(([p, q]) => ({ price: toNum(p), qty: toNum(q) }))
       .filter((l) => l.qty > 0 && Number.isFinite(l.price))
       .sort((a, b) => a.price - b.price)
       .slice(0, 10);
+    if (bids.length === 0 && asks.length === 0) return;
     const book: OrderBookSnapshot = { bids, asks, updatedAt: Date.now() };
     this.handlers.onBook(book);
 
