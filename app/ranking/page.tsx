@@ -28,6 +28,10 @@ export default function RankingPage() {
           <p className="mt-1 text-[12px] text-muted">
             주간·전체 수익률로 트레이더를 비교합니다. 모든 기록은 모의투자 기준입니다.
           </p>
+          <p className="mt-1 text-[10px] text-muted/70">
+            상위 트레이더는 서비스 시연을 위한 샘플 데이터이며, 내 기록은 이 브라우저의 모의 계좌
+            기준입니다.
+          </p>
         </div>
         <Link
           href="/"

@@ -32,6 +32,9 @@ export default function CommunityPage() {
           포지션 인증부터 매매 전략, 초보 질문까지. 모의투자 기록을 남기고 다른 트레이더와 비교해
           보세요.
         </p>
+        <p className="mt-1 text-[10px] text-muted/70">
+          Supabase를 연결하기 전(데모 모드)에는 서비스 시연용 샘플 게시글이 함께 표시됩니다.
+        </p>
       </header>
 
       <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_300px]">
